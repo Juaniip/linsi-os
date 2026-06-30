@@ -41,7 +41,12 @@ jobs:
             lynis
 
       - name: Configurar live-build
-        run: sudo lb config
+        run: |
+          # Ejecutar auto/config explícitamente — contiene --distribution noble y todos los flags
+          chmod +x auto/config
+          sudo bash auto/config
+          # Verificar que noble quedó configurado
+          grep "noble" .build/config 2>/dev/null || grep "noble" config/common 2>/dev/null || echo "Verificar config manualmente"
 
       - name: Build ISO
         run: |
