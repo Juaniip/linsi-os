@@ -1,0 +1,170 @@
+#!/bin/bash
+# 0100-hardening.hook.chroot — Hardening del sistema base
+# Se ejecuta dentro del chroot durante el build de la ISO
+# Ref: CIS Ubuntu 24.04 Benchmark
+
+set -euo pipefail
+echo "[LINSI] Aplicando hardening del sistema..."
+
+# ── AppArmor ──────────────────────────────────────────────────────────────────
+echo "[LINSI] AppArmor: habilitando enforce mode..."
+# El flag apparmor=1 security=apparmor ya está en GRUB via auto/config
+# Aquí habilitamos los perfiles disponibles
+if command -v aa-enforce &>/dev/null; then
+    find /etc/apparmor.d/ -maxdepth 1 -type f | while read -r profile; do
+        aa-enforce "$profile" 2>/dev/null || true
+    done
+fi
+
+# ── SSH hardening ─────────────────────────────────────────────────────────────
+echo "[LINSI] SSH: aplicando configuración hardenizada..."
+cat > /etc/ssh/sshd_config.d/99-linsi-hardening.conf << 'SSH'
+# LINSI OS - SSH Hardening
+Protocol 2
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowAgentForwarding no
+AllowTcpForwarding no
+SSH
+
+# ── nftables — default deny ───────────────────────────────────────────────────
+echo "[LINSI] nftables: configurando default-deny..."
+cat > /etc/nftables.conf << 'NFT'
+#!/usr/sbin/nft -f
+# LINSI OS - Reglas nftables (default-deny)
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        # Loopback siempre permitido
+        iif "lo" accept
+
+        # Conexiones establecidas / relacionadas
+        ct state established,related accept
+
+        # ICMP (ping) limitado
+        ip protocol icmp icmp type echo-request limit rate 5/second accept
+        ip6 nexthdr icmpv6 accept
+
+        # SSH — solo conexiones entrantes
+        tcp dport 22 ct state new accept
+
+        # Resto: DROP (default policy)
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+NFT
+systemctl enable nftables 2>/dev/null || true
+
+# ── fail2ban ──────────────────────────────────────────────────────────────────
+echo "[LINSI] fail2ban: configurando jail SSH..."
+cat > /etc/fail2ban/jail.d/ssh.conf << 'F2B'
+[sshd]
+enabled  = true
+port     = ssh
+maxretry = 3
+bantime  = 3600
+findtime = 600
+F2B
+systemctl enable fail2ban 2>/dev/null || true
+
+# ── auditd ────────────────────────────────────────────────────────────────────
+echo "[LINSI] auditd: habilitando servicio..."
+systemctl enable auditd 2>/dev/null || true
+# Reglas de auditoría base (CIS-inspired)
+cat > /etc/audit/rules.d/99-linsi.rules << 'AUDIT'
+# LINSI OS - Reglas de auditoría
+
+# Cambios de identidad
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+
+# Cambios de sudoers
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+
+# Módulos del kernel
+-w /sbin/insmod -p x -k modules
+-w /sbin/rmmod -p x -k modules
+-w /sbin/modprobe -p x -k modules
+
+# Acceso a /etc/ssh
+-w /etc/ssh/sshd_config -p wa -k sshd
+AUDIT
+
+# ── Kernel hardening (sysctl) ─────────────────────────────────────────────────
+echo "[LINSI] sysctl: aplicando parámetros de hardening..."
+cat > /etc/sysctl.d/99-linsi-hardening.conf << 'SYSCTL'
+# LINSI OS - Kernel hardening
+
+# Red
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.tcp_syncookies = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv6.conf.all.accept_redirects = 0
+
+# Protección de memoria
+kernel.randomize_va_space = 2
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.yama.ptrace_scope = 1
+
+# Filesystem
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+fs.suid_dumpable = 0
+SYSCTL
+
+# ── Política de contraseñas ───────────────────────────────────────────────────
+echo "[LINSI] PAM: configurando política de contraseñas..."
+cat > /etc/security/pwquality.conf << 'PWQUAL'
+minlen = 12
+minclass = 3
+maxrepeat = 3
+dcredit = -1
+ucredit = -1
+lcredit = -1
+ocredit = -1
+PWQUAL
+
+# ── Deshabilitar servicios innecesarios ───────────────────────────────────────
+echo "[LINSI] Deshabilitando servicios innecesarios..."
+for svc in avahi-daemon cups bluetooth; do
+    systemctl disable "$svc" 2>/dev/null || true
+    systemctl mask "$svc" 2>/dev/null || true
+done
+
+# ── UMASK estricto ────────────────────────────────────────────────────────────
+sed -i 's/^UMASK.*/UMASK\t\t027/' /etc/login.defs 2>/dev/null || true
+
+echo "[LINSI] Hardening completado."

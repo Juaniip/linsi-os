@@ -1,0 +1,20 @@
+#!/bin/bash
+# 0200-cleanup.hook.chroot — Limpieza final del chroot antes de empaquetar
+
+set -euo pipefail
+echo "[LINSI] Limpieza del chroot..."
+
+# Limpiar caché de apt
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+rm -rf /var/cache/apt/archives/*.deb
+
+# Limpiar logs
+find /var/log -type f -delete
+find /tmp -type f -delete
+
+# Limpiar history
+rm -f /root/.bash_history
+rm -f /home/*/.bash_history
+
+echo "[LINSI] Limpieza completada."

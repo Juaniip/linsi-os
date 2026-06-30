@@ -1,0 +1,30 @@
+#!/bin/sh
+# auto/config — Configuración principal de live-build para LINSI OS
+# Documentación: https://live-team.pages.debian.net/live-manual/
+
+set -e
+
+lb config noauto \
+    --mode ubuntu \
+    --distribution noble \
+    --architectures amd64 \
+    --binary-images iso-hybrid \
+    --debian-installer live \
+    --debian-installer-gui true \
+    --archive-areas "main restricted universe multiverse" \
+    --apt-options "--yes --no-install-recommends" \
+    --apt-indices false \
+    --apt-source-archives false \
+    --bootappend-live "boot=live components quiet splash apparmor=1 security=apparmor" \
+    --bootappend-install "apparmor=1 security=apparmor" \
+    --mirror-bootstrap "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-chroot "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
+    --debootstrap-options "--include=apt-transport-https,ca-certificates,gnupg2" \
+    --linux-flavours generic \
+    --memtest none \
+    --iso-application "LINSI OS" \
+    --iso-publisher "LINSI - UTN FRLP" \
+    --iso-volume "LINSI-OS" \
+    "${@}"

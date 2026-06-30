@@ -1,0 +1,24 @@
+# lab-security.list.chroot
+# Instalado solo si el usuario elige: LAB Equipment > Security
+
+nmap
+masscan
+nikto
+dnsenum
+wireshark
+tshark
+tcpdump
+netcat-openbsd
+sqlmap
+dirb
+gobuster
+john
+hashcat
+hydra
+crunch
+aircrack-ng
+binwalk
+foremost
+exiftool
+volatility3
+metasploit-framework

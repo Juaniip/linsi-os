@@ -1,0 +1,37 @@
+# Build output
+output/
+*.iso
+*.img
+.build/
+binary/
+chroot/
+cache/
+
+# live-build auto-generated
+config/binary
+config/bootstrap
+config/chroot
+config/common
+config/source
+.stage/
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secretos — nunca en el repo
+*.key
+*.pem
+*.gpg
+secrets/

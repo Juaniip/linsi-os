@@ -1,0 +1,10 @@
+# lab-infra.list.chroot
+# Instalado solo si el usuario elige: LAB Equipment > Infra
+
+ansible
+ansible-lint
+terraform
+kubectl
+helm
+vagrant
+awscli

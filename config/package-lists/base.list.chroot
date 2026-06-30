@@ -1,0 +1,47 @@
+# base.list.chroot — Sistema base (siempre instalado, sin herramientas de categoría)
+
+# Desktop
+cinnamon
+lightdm
+lightdm-gtk-greeter
+
+# Sistema
+sudo
+curl
+wget
+git
+vim
+nano
+htop
+tree
+unzip
+zip
+rsync
+bash-completion
+man-db
+
+# Red
+network-manager
+network-manager-gnome
+openssh-client
+openssh-server
+net-tools
+dnsutils
+
+# Hardware / drivers
+xserver-xorg
+firmware-linux
+firmware-linux-nonfree
+
+# Fuentes
+fonts-noto
+fonts-noto-color-emoji
+
+# Seguridad base (NO opcional — siempre presente)
+apparmor
+apparmor-utils
+apparmor-profiles
+fail2ban
+auditd
+ufw
+libpam-pwquality

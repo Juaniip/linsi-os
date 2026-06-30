@@ -1,0 +1,17 @@
+# lab-crypto.list.chroot
+# Instalado solo si el usuario elige: LAB Equipment > Crypto
+
+openssl
+ca-certificates
+gnutls-bin
+gnupg2
+gpg-agent
+pinentry-gtk2
+age
+libssl-dev
+libsodium-dev
+libgcrypt20-dev
+hashdeep
+rhash
+b3sum
+steghide

@@ -1,0 +1,11 @@
+# personal-gaming.list.chroot
+# Instalado solo si el usuario elige: Personal > Gaming
+
+steam
+wine
+wine32
+winetricks
+lutris
+gamemode
+mangohud
+retroarch
