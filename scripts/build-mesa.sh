@@ -315,10 +315,31 @@ step_verify_libdrm() {
 # EFECTIVAMENTE van a estar los headers/libs cruzados de verdad (instalados
 # por la ETAPA 2). Se copia ese binario nativo directo a
 # ${LFS_SYSROOT}/usr/bin/llvm-config, pisando el cruzado (roto) que deja el
-# "ninja install" de la Etapa 2. Mesa lo encuentra solo por PATH (no hace
-# falta --native-file para esto: ${LFS_SYSROOT}/usr/bin ya está al final del
-# PATH desde Fase 6 Parte 1, y no hay ningún otro "llvm-config" antes en el
-# PATH que lo tape).
+# "ninja install" de la Etapa 2.
+#
+# CORRECCIÓN #2 (post-build real, 2026-09-01): la parte de "Mesa lo
+# encuentra solo por PATH" de más arriba era la suposición equivocada.
+# Error real: "llvm-config found: NO need ['>= 18.0.0']" seguido de un
+# intento fallido de Meson de bajar LLVM como subproyecto fallback (algo
+# que ni siquiera queremos -- ya tenemos LLVM 23.1.0 compilado y andando).
+# El formato exacto de ese mensaje ("X found: NO", sin una línea previa de
+# "Program 'llvm-config' found: YES <versión>") es el que imprime Meson
+# cuando NINGÚN candidato de llvm-config fue siquiera encontrado -- no un
+# mismatch de versión (23.1.0 es sobrada para el >=18.0.0 que pide Mesa).
+# La dependencia `dependency('llvm', method: 'config-tool', ...)` de Mesa
+# es una dependencia de la MÁQUINA HOST en terminología de Meson (o sea,
+# el TARGET real en un build cruzado -- Mesa la linkea al binario final),
+# y para ese tipo de dependencias el mecanismo config-tool de Meson NO cae
+# de vuelta a buscar en el PATH del contenedor si el binario no está
+# declarado explícitamente en la sección [binaries] del CROSS FILE --
+# confirmado contra la documentación real de Meson (mesonbuild.com,
+# Machine-files.html: "An incomplete list of internally used programs
+# that can be overridden here is: ... llvm-config ...") y contra el
+# historial del issue real mesonbuild/meson#2921 ("Cross-file binaries
+# not being used for ConfigTool"), que trata justamente de esta ambigüedad
+# entre PATH y cross-file para llvm-config. Mismo mecanismo que ya usamos
+# para glslangValidator más abajo en step_mesa(): se pisa `llvm-config`
+# directo en el [binaries] del cross-file con `write_meson_crossfile()`.
 #
 # CORRECCIÓN (post-build real, 2026-08-30): el prefix SÍ queda bien grabado
 # en el binario (confirmado: llvm-config.cpp de LLVM compara su ubicación de
@@ -571,7 +592,11 @@ step_mesa() {
     cd "${src}"
 
     local crossfile="${LFS_BUILD}/meson-cross-linsi.ini"
-    write_meson_crossfile "${crossfile}" "glslangValidator = '${GLSLANG_NATIVE_BIN}'"
+    # llvm-config: ver el comentario largo de "CORRECCIÓN #2" más arriba --
+    # el mecanismo config-tool de Meson no cae al PATH para dependencias de
+    # host machine en build cruzado, hace falta declararlo acá explícito.
+    write_meson_crossfile "${crossfile}" "glslangValidator = '${GLSLANG_NATIVE_BIN}'
+llvm-config = '${LFS_SYSROOT}/usr/bin/llvm-config'"
 
     local nativefile="${LFS_BUILD}/meson-native-linsi.ini"
     write_meson_nativefile "${nativefile}" "glslangValidator = '${GLSLANG_NATIVE_BIN}'"

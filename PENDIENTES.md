@@ -515,6 +515,38 @@ las Partes 2/3.
   Meson puede esconder más de una causa real distinta en pasos sucesivos —
   conviene revisar el `meson-log.txt` de nuevo cada vez que el mensaje
   resumido no cierre, en vez de asumir que es la misma causa ya conocida.
+- **Undécimo error real (2026-09-01), ya corregido -- una suposición
+  documentada resultó equivocada.** Con mako y yaml resueltos, Mesa avanzó
+  mucho más lejos en el configure (todos los checks de compilador, libdrm,
+  etc. en verde) y recién ahí falló:
+  ```
+  llvm-config found: NO need ['>= 18.0.0']
+  Run-time dependency LLVM found: NO  (tried config-tool)
+  ...
+  ERROR: Neither a subproject directory nor a llvm.wrap file was found.
+  ```
+  El comentario original en `build-mesa.sh` (armado antes de correr el
+  build real) asumía que alcanzaba con que `${LFS_SYSROOT}/usr/bin`
+  estuviera al final del PATH para que Mesa encontrara el `llvm-config`
+  nativo-con-RPATH-parcheado ahí instalado -- **esa suposición era
+  incorrecta.** `dependency('llvm', method: 'config-tool')` es una
+  dependencia de host machine (el target real, en terminología de Meson)
+  en un build cruzado, y para ese tipo de dependencias el mecanismo
+  config-tool de Meson NO cae al PATH del contenedor si el binario no está
+  declarado explícito en el `[binaries]` del cross-file -- confirmado
+  contra la documentación real de Meson (`llvm-config` figura ahí mismo
+  como config-tool pisable) y contra el issue real `mesonbuild/meson#2921`.
+  **Fix:** se agregó `llvm-config = '${LFS_SYSROOT}/usr/bin/llvm-config'`
+  al `[binaries]` del cross-file en `step_mesa()`, mismo mecanismo que ya
+  se usa ahí mismo para `glslangValidator`. No hizo falta tocar el
+  Dockerfile ni tocar LLVM -- el binario ya andaba bien, sólo hacía falta
+  decirle a Meson dónde está en vez de confiar en que lo iba a encontrar
+  solo.
+  **Lección:** una suposición de diseño documentada en el código (aunque
+  esté bien fundamentada con research previo) sigue siendo una suposición
+  hasta que el build real la confirma -- este mismo archivo ya tenía la
+  cita al issue de Meson correcta, pero interpretada al revés de cómo
+  terminó comportándose en la práctica.
 
 ## Fase 6 — Parte 3 (no empezada)
 
