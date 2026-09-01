@@ -1,0 +1,6 @@
+.git
+*.iso
+*.img
+sources/
+build/
+tools/

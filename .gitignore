@@ -1,0 +1,43 @@
+# === LINSI-OS — .gitignore ===
+# Creado 2026-09-01 al inicializar versionado del proyecto.
+
+# --- Fuentes descargadas (tarballs de upstream) ---
+# Se re-descargan solos con fetch() (env.sh define las URLs/versiones/hashes,
+# que sí están versionados). 765MB+ de binarios de terceros no van en git.
+sources/
+
+# --- Logs de build ---
+# Generados automáticamente por entrypoint.sh en cada `podman-compose run`.
+# Útiles para debug en el momento, pero no son código fuente del proyecto.
+logs/
+*.log
+
+# --- Artefactos de build / sysroot ---
+# El volumen podman "linsios-build" (/lfs/build) es nombrado, no bind-mount,
+# así que normalmente no aparece acá — pero por si algo escribe local:
+build/
+tools/
+lfs/
+sysroot/
+
+# --- Imágenes de disco / ISOs generados ---
+*.iso
+*.img
+*.img.xz
+*.img.gz
+
+# --- Objetos compilados sueltos (por si queda algo fuera de build/) ---
+*.o
+*.a
+*.so
+*.so.*
+
+# --- Basura de OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# --- Carpeta de descarte usada durante el trabajo con Claude ---
+_to_delete/

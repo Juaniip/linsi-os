@@ -1,0 +1,66 @@
+# ==============================================================================
+# LINSI-OS · Fase 5 — CI/CD, primer escalón: lint de todos los scripts de build
+# ------------------------------------------------------------------------------
+# Esto es DELIBERADAMENTE chico: sólo corre `bash -n` (chequeo de sintaxis,
+# sin ejecutar nada) sobre cada scripts/build-*.sh y scripts/env.sh en cada
+# push. Por qué no arranca ya compilando/firmando/publicando paquetes de
+# verdad, que es lo que pide la guía para esta fase:
+#
+#   Un build completo de LINSI-OS (Fase 0 a la que sea que estemos) tarda
+#   HORAS reales (cross-toolchain, glibc, systemd, todo el resto) y depende
+#   de los volúmenes persistentes de Podman (linsios-tools/build/sysroot/boot)
+#   que sólo existen en tu máquina Windows -- un runner de GitHub Actions
+#   hosteado arranca de cero cada vez, sin esos volúmenes, así que reintentar
+#   el build entero en cada push ni entra en el límite de tiempo de un runner
+#   gratuito ni tiene sentido económico.
+#
+#   Para que el CI/CD compile y publique paquetes REALES (firmados, subidos
+#   al repo de la Pi) hace falta antes: (a) un runner con volúmenes
+#   persistentes -- lo más natural es un runner self-hosted en la propia Pi o
+#   en tu máquina, no uno hosteado de GitHub -- y (b) que cada paquete se
+#   empaquete de verdad como un .apk individual (con `apk mkpkg` o similar)
+#   en vez de instalarse directo al sysroot compartido como venimos haciendo
+#   hasta Fase 5 -- ninguna de las dos cosas está decidida todavía.
+#
+# Mientras tanto, esto SÍ es genuinamente útil ya: te avisa en cada push si
+# algún script quedó con un error de sintaxis, antes de descubrirlo recién a
+# mitad de una build de 2+ horas en la Pi/Windows.
+# ==============================================================================
+name: Lint scripts de LINSI-OS
+
+on:
+  push:
+    paths:
+      - 'linsi-os/scripts/**'
+  pull_request:
+    paths:
+      - 'linsi-os/scripts/**'
+  workflow_dispatch: {}
+
+jobs:
+  bash-syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n sobre cada script
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in linsi-os/scripts/*.sh; do
+            echo "::group::${f}"
+            if bash -n "${f}"; then
+              echo "OK: ${f}"
+            else
+              echo "::error file=${f}::error de sintaxis"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "${fail}"
+
+      - name: shellcheck (avisos, no rompe el build)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning linsi-os/scripts/*.sh || true

@@ -1,0 +1,32 @@
+# ==============================================================================
+# LINSI-OS · Fase 5 — regla de ingress para el túnel Zero Trust que ya tenés
+# ------------------------------------------------------------------------------
+# ESTO NO ES UN config.yml COMPLETO -- es sólo la regla nueva que hay que
+# agregar a tu config.yml existente (normalmente en /etc/cloudflared/config.yml
+# o ~/.cloudflared/config.yml en la Pi). NO reemplaces tu archivo actual con
+# esto: tu túnel ya existe y probablemente ya rutea otras cosas -- copiá sólo
+# la línea de "hostname:" de acá adentro de la lista "ingress:" que ya tenés.
+#
+# IMPORTANTE — orden: cloudflared evalúa las reglas de "ingress:" de arriba
+# hacia abajo y usa la PRIMERA que matchea. Esta regla nueva tiene que ir
+# ANTES de cualquier regla catch-all al final (normalmente algo como
+# "service: http_status:404" sin "hostname:"), si no nunca la va a alcanzar.
+#
+# Reemplazá "paquetes.tu-dominio.com" por el hostname real que quieras usar
+# para el repo (tiene que ser un dominio/subdominio que ya tengas agregado a
+# tu cuenta de Cloudflare) -- y después ese mismo hostname es el que va en
+# ${LFS_SYSROOT}/etc/apk/repositories cuando se corra otra vez
+# build-infra.sh apk-signing (o se edite el archivo a mano, ver el TODO que
+# deja ese paso).
+# ==============================================================================
+
+# --- agregar esta entrada a la lista "ingress:" de tu config.yml, ANTES del
+#     catch-all final ---
+  - hostname: paquetes.tu-dominio.com
+    service: http://127.0.0.1:8088
+
+# Después de editar config.yml:
+#   sudo systemctl restart cloudflared
+#   cloudflared tunnel route dns <nombre-o-uuid-de-tu-tunel> paquetes.tu-dominio.com
+#   (el segundo comando sólo hace falta la primera vez que usás ese hostname
+#   con este túnel -- crea el registro DNS en Cloudflare apuntando al túnel)

@@ -1,0 +1,58 @@
+services:
+  builder:
+    build:
+      context: .
+      args:
+        BUILD_UID: "${UID:-1000}"
+        BUILD_GID: "${GID:-1000}"
+    image: linsios-builder:fase0
+    container_name: linsios-builder
+    hostname: linsi-taller
+
+    # SYS_ADMIN + /dev/loop-control se necesitan recién en Fase 8 (montar la
+    # SquashFS/ISO con loop devices). Se dejan comentados hasta que lleguemos
+    # ahí para mantener el contenedor lo menos privilegiado posible mientras
+    # tanto sólo compilamos toolchain/kernel/userspace.
+    # cap_add:
+    #   - SYS_ADMIN
+    # devices:
+    #   - /dev/loop-control
+
+    volumes:
+      # Persistentes: sobreviven a `docker compose down` y a reconstrucciones
+      # de la imagen, para no volver a descargar/compilar Binutils y GCC
+      # cada vez que se ajusta el Dockerfile.
+      - linsios-tools:/lfs/tools
+      - linsios-build:/lfs/build
+      # Sysroot: acá caen las cabeceras de Linux (Fase 0) y, más adelante,
+      # glibc (Fase 2). Antes vivía dentro de /lfs sin volumen propio y se
+      # perdía si se recreaba el contenedor sin volver a correr el build.
+      - linsios-sysroot:/lfs/usr
+      # Kernel compilado (Fase 1): bzImage + módulos, listos para Fase 8 (ISO).
+      - linsios-boot:/lfs/boot
+
+      # --- Bind mounts: se editan/copian en Windows y se ven al instante adentro ---
+      # Los scripts se montan de solo lectura desde el repo para poder
+      # iterar sin reconstruir la imagen.
+      - ./scripts:/lfs/scripts:ro
+      # Cualquier patch de kernel (o de otro paquete, más adelante) se deja
+      # acá; el contenedor lo ve enseguida sin copiar nada a mano.
+      - ./patches:/lfs/patches:ro
+      # Tarballs de fuente (Binutils/GCC/kernel). Bind mount en vez de volumen
+      # nombrado a propósito: si dejás un .tar.xz acá (por ejemplo
+      # linux-7.2.tar.xz) el build lo usa directo, sin descargarlo de nuevo.
+      - ./sources:/lfs/sources
+      # Logs de cada corrida (agregado 2026-08-27): entrypoint.sh graba acá
+      # automáticamente la salida completa de cada `docker-compose run`, para
+      # verla directo en Windows sin tener que copiar/pegar ni subir el log
+      # a mano.
+      - ./logs:/lfs/logs
+
+    stdin_open: true
+    tty: true
+
+volumes:
+  linsios-tools:
+  linsios-build:
+  linsios-sysroot:
+  linsios-boot:
