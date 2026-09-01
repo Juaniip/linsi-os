@@ -141,6 +141,16 @@ RUN find /etc/apt -type f \( -name 'sources.list' -o -name '*.sources' \) \
 #      sólo pide mako >=0.8.0 (de 2013), un piso bajísimo, nada que ver
 #      con los pisos de versión que sí nos obligaron a compilar de fuente
 #      (meson, glslang).
+#   12) python3-yaml (agregado 2026-09-01 tras un error real de build, Fase
+#      6 Parte 2, Mesa): mismo chequeo combinado de Python de meson.build
+#      que el ítem 11 -- una vez resuelto "import mako", el siguiente paso
+#      del mismo script hace "import yaml" (Mesa usa PyYAML para generar
+#      parte del código de los drivers, ej. tablas de extensiones/formatos)
+#      y ESE es el que fallaba ahora, otra vez tapado por el mismo mensaje
+#      genérico "ERROR: Python >= 3.10 not found" -- confirmado de nuevo
+#      leyendo el meson-log.txt real (Running command: python3 -c 'import
+#      yaml' -> ModuleNotFoundError). python3-yaml de Debian alcanza sin
+#      drama de versión, igual que mako.
 # ------------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -168,6 +178,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         patchelf \
         glslang-tools \
         python3-mako \
+        python3-yaml \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

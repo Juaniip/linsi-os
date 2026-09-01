@@ -497,6 +497,24 @@ las Partes 2/3.
   código fuente del proyecto -- tiene el comando exacto que se corrió y su
   salida real, mucho más confiable que reconstruir la lógica leyendo
   mirrors de GitHub que pueden no coincidir con la versión exacta en uso.
+- **Décimo error real (2026-09-01), ya corregido -- mismo mensaje engañoso
+  que el noveno, pero otra causa distinta.** Después de reconstruir la
+  imagen con `python3-mako` (ítem 11), volvió a salir el mismo
+  `meson.build:1136:2: ERROR: Problem encountered: Python >= 3.10 not
+  found` con `python3.11` encontrado igual. Como ya habíamos visto que este
+  mensaje puede tapar cualquier cosa, fui directo al `meson-log.txt`
+  completo de nuevo en vez de asumir que era mako otra vez. El log mostró
+  que el chequeo de mako ahora SÍ pasaba, pero el siguiente paso del mismo
+  script (`python3 -c 'import yaml'`) fallaba con
+  `ModuleNotFoundError: No module named 'yaml'` -- Mesa también usa PyYAML
+  en tiempo de build (genera código de tablas de formato/extensiones desde
+  YAML). Se agregó `python3-yaml` al Dockerfile (ítem 12), mismo patrón que
+  mako: apt alcanza sin drama de versión. **Requiere `podman-compose
+  build` antes de reintentar.**
+  **Confirma la lección del error anterior:** un mismo mensaje resumido de
+  Meson puede esconder más de una causa real distinta en pasos sucesivos —
+  conviene revisar el `meson-log.txt` de nuevo cada vez que el mensaje
+  resumido no cierre, en vez de asumir que es la misma causa ya conocida.
 
 ## Fase 6 — Parte 3 (no empezada)
 
