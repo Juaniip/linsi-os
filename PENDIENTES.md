@@ -513,6 +513,20 @@ las Partes 2/3.
   Desktop no arrancaba en tu máquina, así que se sacó la dependencia por
   completo. De acá en más usá `podman-compose` (con guion) para todo, no
   `docker-compose.exe` ni `podman compose` (sin guion).
+- **Versionado con git inicializado recién ahora (2026-09-01)** — hasta este
+  punto todo el trabajo (Fases 0 a 6 Parte 2, con todos los fixes de Mesa
+  incluidos) se venía escribiendo directo en tu carpeta sin ningún repo git
+  atrás — ni un commit. Se armó recién: `git init -b main`, un `.gitignore`
+  que excluye `sources/` (~765MB de tarballs de upstream, se re-descargan
+  solos con `fetch()`) y `logs/`/`*.log` (se regeneran en cada build), y un
+  commit inicial (`ff27b17`) con las 23 fuentes reales del proyecto
+  (Dockerfile, docker-compose.yml, todos los scripts de fase, env.sh,
+  este mismo archivo, los READMEs de fase y el workflow de `.github`).
+  El repo queda **local únicamente** — el push a GitHub lo hace Juani
+  directamente, no yo. De acá en adelante, cada fix real de build (como los
+  9 de Mesa+LLVM de esta sesión) debería ir en su propio commit chico en vez
+  de acumularse todo suelto — así el historial queda útil para volver atrás
+  si algo se rompe.
 
 ## Decisiones ya tomadas (no son deuda, quedan acá como referencia)
 
