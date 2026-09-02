@@ -549,9 +549,26 @@ step_llvm() {
     # lo que hace falta para esos cuatro (reusa todos los .o de clang que
     # clang-cpp empaqueta) y nunca le pide nada a ninja sobre
     # clang-fuzzer-dictionary ni al resto de los ~180 binarios sueltos.
+    #
+    # AGREGADO 2026-09-02, error real Nº2 de esta misma corrida: acotar a
+    # esos 4 targets se llevó puesto, sin querer, un quinto componente que
+    # SPIRV-LLVM-Translator necesita para encontrar a LLVM vía
+    # find_package(LLVM): "LLVMConfig.cmake" no lo instala install-LLVM ni
+    # ninguno de los otros tres -- viene de un componente aparte,
+    # "cmake-exports", confirmado contra llvm/cmake/modules/CMakeLists.txt
+    # real (tag llvmorg-${LLVM_VERSION}): ahí es donde se generan
+    # (configure_file, en tiempo de cmake, no de build) y se instalan
+    # LLVMConfig.cmake + LLVMConfigVersion.cmake + LLVMExports.cmake, todos
+    # con "COMPONENT cmake-exports", vía un target autogenerado
+    # "install-cmake-exports" (mismo mecanismo add_llvm_install_targets()
+    # de siempre). A diferencia de install-LLVM/install-clang-cpp, este
+    # target no depende de compilar nada -- los .cmake ya están generados
+    # apenas corre el "cmake -S ... -B" de más arriba -- así que agregarlo
+    # acá es gratis, no dispara ningún build adicional.
     ninja -C "${bdir}" ${MAKEFLAGS} LLVM clang-cpp llvm-headers clang-headers
     DESTDIR="${LFS_SYSROOT}" ninja -C "${bdir}" \
-        install-LLVM install-clang-cpp install-llvm-headers install-clang-headers
+        install-LLVM install-clang-cpp install-llvm-headers install-clang-headers \
+        install-cmake-exports
 
     # Pisar el llvm-config cruzado (instalado recién por el "ninja install"
     # de arriba, pero NO ejecutable acá sin chroot) con el nativo -- ver el
@@ -601,6 +618,15 @@ step_verify_llvm() {
         else
             echo "  [OK] ${lc} --includedir = ${includedir}"
         fi
+    fi
+    # LLVMConfig.cmake: agregado 2026-09-02 -- lo necesita SPIRV-LLVM-Translator
+    # (find_package(LLVM) en su CMakeLists.txt real) para encontrar a LLVM. Lo
+    # instala el target install-cmake-exports, agregado en step_llvm() junto con
+    # este chequeo tras el error real documentado en PENDIENTES.md.
+    if [[ ! -f "${LFS_SYSROOT}/usr/lib/cmake/llvm/LLVMConfig.cmake" ]]; then
+        echo "  [FALTA] LLVMConfig.cmake en ${LFS_SYSROOT}/usr/lib/cmake/llvm"; ok=0
+    else
+        echo "  [OK] LLVMConfig.cmake presente"
     fi
     [[ "${ok}" -eq 1 ]] || die "falta algo de LLVM/Clang en el sysroot (ver arriba)"
     log "OK: LLVM+Clang completos y llvm-config funcional."

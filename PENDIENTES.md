@@ -684,6 +684,55 @@ las Partes 2/3.
   que no tienen nada que ver con lo que en verdad se está usando. Conviene
   identificar los targets de librería/instalación puntuales que el
   consumidor real (acá, Mesa) necesita y pedir sólo esos.
+- **Décimo cuarto error real (2026-09-02), corregido -- efecto colateral
+  directo del error anterior, apareció en la misma corrida al llegar a
+  SPIRV-LLVM-Translator (con SPIRV-Tools ya compilado e instalado sin
+  problemas):**
+  ```
+  -- Using SPIR-V Headers from
+            /lfs/build/SPIRV-Headers-575b6512579ebde466ed3dfc04e413439d14d95d
+  CMake Error at CMakeLists.txt:82 (find_package):
+    Could not find a package configuration file provided by "LLVM"
+    (requested version 23.1.0) with any of the following names:
+      LLVMConfig.cmake
+      llvm-config.cmake
+    Add the installation prefix of "LLVM" to CMAKE_PREFIX_PATH or set
+    "LLVM_DIR" to a directory containing one of the above files.
+  -- Configuring incomplete, errors occurred!
+  ```
+  **Causa raíz:** al acotar `step_llvm()` a los 4 targets `LLVM
+  clang-cpp llvm-headers clang-headers` (fix del error anterior), quedó
+  afuera -sin querer- un quinto componente que ningún consumidor había
+  necesitado hasta ahora: `LLVMConfig.cmake` (+ `LLVMConfigVersion.cmake` +
+  `LLVMExports.cmake`), lo que usa `find_package(LLVM)` de
+  SPIRV-LLVM-Translator para ubicar a LLVM. `-DLLVM_DIR=.../usr/lib/cmake/llvm`
+  ya estaba bien puesto en `step_spirv_llvm_translator()` -- el problema es
+  que ese directorio quedaba vacío, porque esos `.cmake` no los instala
+  `install-LLVM` ni ninguno de los otros tres. Confirmado contra el
+  `llvm/cmake/modules/CMakeLists.txt` real (tag `llvmorg-23.1.0`): esos
+  archivos se generan con `configure_file()` en tiempo de *cmake* (ya
+  existen apenas corre el `cmake -S ... -B ...` de `step_llvm()`, no hace
+  falta compilar nada más) y se instalan con `COMPONENT cmake-exports`,
+  vía un target autogenerado aparte, `install-cmake-exports` (mismo
+  mecanismo `add_llvm_install_targets()` de siempre, pero sin `DEPENDS`
+  -- por eso no arrastra ningún build adicional).
+
+  **Fix real:** agregar `install-cmake-exports` a la línea de `ninja
+  install-*` de `step_llvm()`, junto a los otros cuatro. No hizo falta
+  tocar la línea de build (`ninja LLVM clang-cpp llvm-headers
+  clang-headers`), porque este componente no compila nada, sólo copia
+  archivos ya generados. Se sumó también un chequeo de
+  `LLVMConfig.cmake` a `step_verify_llvm()`, para que la falta de este
+  componente puntual se detecte ahí la próxima vez y no recién en
+  SPIRV-LLVM-Translator, dos pasos después. Validado con `bash -n` y
+  `shellcheck -S warning -e SC1091` (limpio).
+
+  **Lección:** cuando se acota un target grande a sólo lo que un
+  consumidor conocido necesita (Mesa, en el error anterior), conviene
+  revisar también qué necesitan los pasos *intermedios* del propio
+  pipeline (acá, SPIRV-LLVM-Translator, que no es lo que Mesa linkea
+  directamente pero sí depende de encontrar a LLVM vía CMake) antes de
+  asumir que la lista de targets ya está completa.
 
 ## Fase 6 — Parte 3 (no empezada)
 
