@@ -1374,7 +1374,7 @@ step_libxkbcommon() {
     # NO depende de xkbregistry. Se pospone a Fase 6 Parte 3 (Qt6/KDE), que
     # es quien realmente va a necesitar listar layouts (kxkbcommon/kwin) --
     # ahí hace falta agregar un step_libxml2() cross-compilado y recién
-    # entonces volver a poner esto en true. Ver PENDIENTES.md.
+    # entonces volver a poner esto en true. Ver docs/PENDIENTES.md.
     meson setup "${bdir}" \
         --cross-file="${crossfile}" \
         --native-file="${nativefile}" \

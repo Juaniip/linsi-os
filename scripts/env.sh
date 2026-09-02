@@ -290,7 +290,7 @@ export MESA_VERSION="26.2.1"                 # VERIFICAR: gitlab.fd.o bloqueado 
 export GLSLANG_VERSION="16.3.0"
 
 # --- Fase 6 Parte 2 (cont.) — Clang + SPIRV-Tools + SPIRV-LLVM-Translator ------
-# Agregado 2026-09-02, decisión explícita (Opción B de CONTEXTO_PENDIENTE_MESA.md,
+# Agregado 2026-09-02, decisión explícita (Opción B de docs/CONTEXTO_PENDIENTE_MESA.md,
 # tomada en la PC de escritorio con 48GB de RAM): el build real de Mesa
 # ${MESA_VERSION} con iris+intel_vk habilitados (RTX3060/RX7700/Intel del lab)
 # activa "with_driver_using_cl" en el meson.build real de Mesa -- necesita
@@ -315,7 +315,7 @@ export GLSLANG_VERSION="16.3.0"
 #     NOT CYGWIN", no depende de ningún flag extra).
 #   - dep_spirv_tools (línea ~2084): SPIRV-Tools (>= 2024.1) es OBLIGATORIO
 #     apenas with_clc=true -- esto NO estaba mencionado en
-#     CONTEXTO_PENDIENTE_MESA.md (esa nota se escribió antes de poder leer el
+#     docs/CONTEXTO_PENDIENTE_MESA.md (esa nota se escribió antes de poder leer el
 #     meson.build real). Es un componente nuevo, no sólo Clang+libclc+SPIRV-LLVM-
 #     Translator como se había anotado ahí.
 #   - dep_clc (libclc externo, línea ~985): CONFIRMADO que NO hace falta para

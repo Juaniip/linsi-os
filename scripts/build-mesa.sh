@@ -22,7 +22,7 @@
 #     AMDGPU (lo necesita radeonsi para compilar shaders) -- nada de ARM,
 #     RISC-V, etc. que no vamos a usar nunca acá.
 #
-# Lo que se dejó AFUERA a propósito (ver PENDIENTES.md, no es un olvido):
+# Lo que se dejó AFUERA a propósito (ver docs/PENDIENTES.md, no es un olvido):
 #   - Vulkan por software (lavapipe, "vulkan-drivers=swrast" -- ese option sí
 #     se sigue llamando "swrast", es un namespace de opciones separado de
 #     "gallium-drivers"): sigue sin estar en el plan.
@@ -92,7 +92,7 @@
 # "llvm-config" durante el build de Mesa -- ver el comentario largo en
 # step_llvm() antes de tocar nada ahí. Es voluntad expresa de este proyecto
 # (y de quien pidió esto) no dar por sentado que esto va a salir a la
-# primera: el propio PENDIENTES.md, desde antes de escribir este script, ya
+# primera: el propio docs/PENDIENTES.md, desde antes de escribir este script, ya
 # decía "cross-compilar LLVM es delicado y merece su propia pasada de
 # research" -- research que se hizo (LLVM.org, Buildroot real, docs oficiales
 # de Mesa sobre detección de LLVM, un issue real de Meson sobre esto mismo),
@@ -162,7 +162,7 @@ extract_once() {
 # necesitan paquetes sin código compilado) y el parámetro extra_binaries para
 # poder pisar find_program()s puntuales sin --native-file (find_program() sin
 # native:true resuelve contra ACÁ, no contra el native file -- lección real de
-# wireplumber/spa-json-dump, ver PENDIENTES.md).
+# wireplumber/spa-json-dump, ver docs/PENDIENTES.md).
 write_meson_crossfile() {
     local crossfile="$1"
     local extra_binaries="${2:-}"
@@ -622,7 +622,7 @@ step_verify_llvm() {
     # LLVMConfig.cmake: agregado 2026-09-02 -- lo necesita SPIRV-LLVM-Translator
     # (find_package(LLVM) en su CMakeLists.txt real) para encontrar a LLVM. Lo
     # instala el target install-cmake-exports, agregado en step_llvm() junto con
-    # este chequeo tras el error real documentado en PENDIENTES.md.
+    # este chequeo tras el error real documentado en docs/PENDIENTES.md.
     if [[ ! -f "${LFS_SYSROOT}/usr/lib/cmake/llvm/LLVMConfig.cmake" ]]; then
         echo "  [FALTA] LLVMConfig.cmake en ${LFS_SYSROOT}/usr/lib/cmake/llvm"; ok=0
     else
