@@ -25,10 +25,7 @@
 # Lo que se dejó AFUERA a propósito (ver PENDIENTES.md, no es un olvido):
 #   - Vulkan por software (lavapipe, "vulkan-drivers=swrast" -- ese option sí
 #     se sigue llamando "swrast", es un namespace de opciones separado de
-#     "gallium-drivers"): según la documentación real de Mesa, necesita
-#     Clang de verdad (no sólo las librerías de LLVM) --
-#     LLVM_ENABLE_PROJECTS="clang" agregado a este mismo build cruzado el
-#     día que haga falta.
+#     "gallium-drivers"): sigue sin estar en el plan.
 #   - NVK (driver Vulkan nativo para Nvidia): a la fecha de este script ni
 #     siquiera figura como choice válido en el meson_options.txt real de
 #     Mesa -- nouveau (Gallium/OpenGL) es lo que hay disponible.
@@ -43,6 +40,54 @@
 #   - glvnd (dispatcher multi-vendor de OpenGL): sólo hace falta si algún día
 #     convive Mesa con un driver propietario de Nvidia -- no es el caso hoy.
 #
+# ------------------------------------------------------------------------------
+# AGREGADO 2026-09-02 -- Clang + SPIRV-Tools + SPIRV-LLVM-Translator
+# (Opción B de CONTEXTO_PENDIENTE_MESA.md, decidido en la PC de escritorio con
+# 48GB de RAM, para tener Intel real -- iris/anv -- en esta misma pasada).
+#
+# El motivo: con iris (gallium) e intel_vk/anv (vulkan) habilitados, el
+# meson.build REAL de Mesa ${MESA_VERSION} (leído directo del propio
+# mesa-${MESA_VERSION}.tar.gz ya descargado, no de un mirror desactualizado)
+# activa "with_driver_using_cl" -- Mesa necesita compilar mesa-clc/intel_clc,
+# su compilador interno de OpenCL C a SPIR-V para shaders/kernels internos de
+# esos dos drivers. El error real ya visto en la sesión anterior
+# ("Dependency 'LLVMSPIRVLib' not found") era sólo el PRIMERO de varios
+# huecos -- research completo (leyendo el meson.build real, no la docs
+# genérica) encontró lo siguiente:
+#
+#   - dep_clang (Clang): la Mesa ${MESA_VERSION} real YA NO usa
+#     dependency('clang', method:'cmake') como versiones viejas -- usa
+#     cpp.find_library('clang-cpp', dirs: llvm_libdir) primero, y sólo si
+#     eso falla cae a linkear ~15 librerías estáticas de clang una por una.
+#     Como ya compilamos LLVM con -Dshared-llvm=enabled, alcanza con que
+#     exista libclang-cpp.so en el sysroot. Confirmado contra
+#     clang/tools/CMakeLists.txt real de la tag llvmorg-${LLVM_VERSION}:
+#     ese .so se arma solo en Linux con LLVM_ENABLE_PROJECTS=clang, sin
+#     flags extra (la condición ahí es sólo "UNIX AND NOT CYGWIN").
+#   - dep_spirv_tools: SPIRV-Tools (>= 2024.1) es OBLIGATORIO apenas
+#     with_clc=true -- componente nuevo, NO estaba anotado en
+#     CONTEXTO_PENDIENTE_MESA.md (esa nota se escribió sin poder leer el
+#     meson.build real todavía).
+#   - dep_clc (libclc EXTERNO): CONFIRMADO que NO hace falta para nuestra
+#     selección de drivers. Sólo se resuelve
+#     "if with_gallium_rusticl or with_microsoft_clc" en el meson.build real
+#     -- ninguno de los dos está en nuestro -Dgallium-drivers=
+#     iris,radeonsi,nouveau,llvmpipe / -Dvulkan-drivers=amd,intel. with_clc
+#     queda en true igual (por iris/intel_vk), pero eso sólo obliga a
+#     LLVM+clang+SPIRV-Tools+LLVMSPIRVLib -- el código que de verdad usa
+#     libclc (nir_load_libclc.c, en src/compiler/clc/meson.build real) sólo
+#     se agrega "if dep_clc.found()", y dep_clc nunca se resuelve en nuestro
+#     caso. Esto SIMPLIFICA la Opción B tal como se había descrito
+#     originalmente: no hace falta cross-compilar libclc (bitcode LLVM
+#     por-target, la parte más pesada y delicada que se había anticipado) --
+#     un componente entero menos que compilar.
+#
+# Orden real de compilación de estos tres componentes nuevos:
+#   spirv-headers -> spirv-tools -> spirv-llvm-translator (necesita LLVM
+#   cruzado + opcionalmente detecta SPIRV-Tools ya instalado) -> mesa.
+# Van DESPUÉS de llvm/glslang-native y ANTES de mesa en la secuencia "all".
+# ------------------------------------------------------------------------------
+#
 # La parte MÁS delicada de todo esto es cómo LLVM resuelve su propio
 # "llvm-config" durante el build de Mesa -- ver el comentario largo en
 # step_llvm() antes de tocar nada ahí. Es voluntad expresa de este proyecto
@@ -54,13 +99,21 @@
 # pero sin poder correr nada en vivo hasta que tiren el build real.
 #
 # Orden (cada paso depende del anterior):
-#   1. libdrm       -> bindings de espacio de usuario al DRM/GEM del kernel
-#   2. llvm-native  -> build NATIVO mínimo (llvm-tblgen + llvm-config), no
-#                      se instala nada del sistema final con esto
-#   3. llvm         -> build CRUZADO real (libLLVM + headers), el que
-#                      efectivamente queda en el sysroot
-#   4. mesa         -> los drivers en sí, usa libdrm + LLVM + el
-#                      wayland-scanner nativo de la Parte 1
+#   1. libdrm                  -> bindings de espacio de usuario al DRM/GEM
+#   2. llvm-native              -> build NATIVO mínimo (llvm-tblgen +
+#                                  llvm-config + clang-tblgen), no se instala
+#                                  nada del sistema final con esto
+#   3. llvm                     -> build CRUZADO real (libLLVM + libclang-cpp
+#                                  + headers), el que efectivamente queda en
+#                                  el sysroot
+#   4. glslang-native            -> glslangValidator NATIVO (Mesa >= 12.2)
+#   5. spirv-headers             -> sólo headers/gramática, dos checkouts
+#                                  (uno por consumidor, ver env.sh)
+#   6. spirv-tools               -> cruzado, provee SPIRV-Tools.pc
+#   7. spirv-llvm-translator     -> cruzado, provee LLVMSPIRVLib.pc
+#   8. mesa                      -> los drivers en sí, usa libdrm + LLVM +
+#                                  clang + SPIRV-Tools + LLVMSPIRVLib + el
+#                                  wayland-scanner nativo de la Parte 1
 #
 # Uso:
 #   scripts/build-mesa.sh libdrm
@@ -277,22 +330,32 @@ step_verify_libdrm() {
 # LLVM_TARGETS_TO_BUILD="X86;AMDGPU" nada más -- lo necesita llvmpipe
 # (JIT en X86) y radeonsi (compila shaders para AMDGPU). Nada de ARM/RISC-V/
 # etc: no vamos a generar código para esas arquitecturas nunca en este
-# proyecto. LLVM_ENABLE_PROJECTS vacío: sólo "llvm" (las librerías core),
-# nada de clang/lld/mlir -- Mesa no los necesita para lo que vamos a activar
-# (ver el aviso al principio del archivo sobre lavapipe, que sí pediría clang).
+# proyecto.
+#
+# LLVM_ENABLE_PROJECTS="clang" (agregado 2026-09-02, ver bloque grande al
+# principio del archivo): mesa-clc/intel_clc (que necesitan iris/anv, ya
+# elegidos para el Intel del lab) exigen las LIBRERÍAS de Clang -- no hace
+# falta lld/mlir/clang-tools-extra, sólo "clang" a secas. Esto agrega un
+# tool nativo nuevo a resolver en la Etapa 1: clang-tblgen (ver más abajo,
+# mismo mecanismo que llvm-tblgen -- confirmado contra clang/CMakeLists.txt
+# real de la tag llvmorg-${LLVM_VERSION}, que documenta exactamente este
+# patrón para sus propios builds "bootstrap": "-DCLANG_TABLEGEN=.../clang-tblgen"
+# junto con "-DLLVM_TABLEGEN=.../llvm-tblgen").
 #
 # ETAPA 1 (step_llvm_native, NATIVA, sin --cross-file): build de CMake
-# mínimo (sólo los targets "llvm-tblgen" y "llvm-config", no "ninja install"
-# de todo LLVM) usando el compilador nativo del contenedor. Confirmado contra
-# la documentación real de LLVM (llvm.org/docs/CMake.html, variable
-# LLVM_TABLEGEN: "Full path to a native TableGen executable... intended for
-# cross-compiling") y una receta real de cross-compiling de LLVM en Buildroot
+# mínimo (sólo los targets "llvm-tblgen", "llvm-config" y "clang-tblgen", no
+# "ninja install" de todo LLVM+Clang) usando el compilador nativo del
+# contenedor. Confirmado contra la documentación real de LLVM
+# (llvm.org/docs/CMake.html, variable LLVM_TABLEGEN: "Full path to a native
+# TableGen executable... intended for cross-compiling") y una receta real de
+# cross-compiling de LLVM en Buildroot
 # (linuxembedded.fr/2018/07/llvmclang-integration-into-buildroot): un build
-# cruzado de LLVM NECESITA un llvm-tblgen que corra YA, durante el build,
-# para generar código a partir de los ".td" -- exactamente el mismo patrón
-# de "herramienta de build-time que tiene que ser nativa" que ya vimos tres
-# veces con wayland-scanner en la Parte 1, sólo que acá LLVM mismo ya lo
-# tiene resuelto de fábrica con esta variable, no hace falta --native-file.
+# cruzado de LLVM (y de Clang, por la misma razón) NECESITA un llvm-tblgen /
+# clang-tblgen que corran YA, durante el build, para generar código a partir
+# de los ".td" -- exactamente el mismo patrón de "herramienta de build-time
+# que tiene que ser nativa" que ya vimos tres veces con wayland-scanner en
+# la Parte 1, sólo que acá LLVM/Clang mismos ya lo tienen resuelto de
+# fábrica con estas variables, no hace falta --native-file.
 #
 # El problema nuevo, específico de LLVM, es "llvm-config": Mesa lo necesita
 # para preguntarle "¿dónde están tus headers, tus libs, tenés RTTI?" durante
@@ -374,10 +437,11 @@ step_verify_libdrm() {
 # ------------------------------------------------------------------------------
 LLVM_NATIVE_BUILD="${LFS_BUILD}/llvm-native-build"
 LLVM_TABLEGEN_NATIVE="${LLVM_NATIVE_BUILD}/bin/llvm-tblgen"
+CLANG_TABLEGEN_NATIVE="${LLVM_NATIVE_BUILD}/bin/clang-tblgen"
 
 LLVM_CMAKE_COMMON_FLAGS=(
     -DCMAKE_BUILD_TYPE=Release
-    -DLLVM_ENABLE_PROJECTS=
+    -DLLVM_ENABLE_PROJECTS=clang
     "-DLLVM_TARGETS_TO_BUILD=X86;AMDGPU"
     -DLLVM_TARGET_ARCH=X86
     -DLLVM_INCLUDE_TESTS=OFF
@@ -404,7 +468,7 @@ _llvm_fetch_extract() {
 }
 
 step_llvm_native() {
-    log "LLVM ${LLVM_VERSION} — build NATIVO (llvm-tblgen + llvm-config, para el build cruzado)"
+    log "LLVM+Clang ${LLVM_VERSION} — build NATIVO (llvm-tblgen + llvm-config + clang-tblgen, para el build cruzado)"
     _llvm_fetch_extract
 
     local src="${LFS_BUILD}/llvm-project-${LLVM_VERSION}.src"
@@ -414,19 +478,20 @@ step_llvm_native() {
         -DCMAKE_INSTALL_PREFIX="${LFS_SYSROOT}/usr" \
         "${LLVM_CMAKE_COMMON_FLAGS[@]}"
 
-    ninja -C "${LLVM_NATIVE_BUILD}" ${MAKEFLAGS} llvm-tblgen llvm-config
+    ninja -C "${LLVM_NATIVE_BUILD}" ${MAKEFLAGS} llvm-tblgen llvm-config clang-tblgen
 
     [[ -x "${LLVM_TABLEGEN_NATIVE}" ]] || die "no se compiló llvm-tblgen nativo"
     [[ -x "${LLVM_NATIVE_BUILD}/bin/llvm-config" ]] || die "no se compiló llvm-config nativo"
-    log "LLVM nativo listo: llvm-tblgen en ${LLVM_TABLEGEN_NATIVE}"
+    [[ -x "${CLANG_TABLEGEN_NATIVE}" ]] || die "no se compiló clang-tblgen nativo -- ¿LLVM_ENABLE_PROJECTS incluye 'clang'?"
+    log "LLVM+Clang nativos listos: llvm-tblgen en ${LLVM_TABLEGEN_NATIVE}, clang-tblgen en ${CLANG_TABLEGEN_NATIVE}"
 }
 
 step_llvm() {
     require_toolchain
-    [[ -x "${LLVM_TABLEGEN_NATIVE}" ]] \
-        || die "no está el llvm-tblgen NATIVO en ${LLVM_NATIVE_BUILD}/bin -- corré primero: scripts/build-mesa.sh llvm-native"
+    [[ -x "${LLVM_TABLEGEN_NATIVE}" && -x "${CLANG_TABLEGEN_NATIVE}" ]] \
+        || die "no están llvm-tblgen/clang-tblgen NATIVOS en ${LLVM_NATIVE_BUILD}/bin -- corré primero: scripts/build-mesa.sh llvm-native"
 
-    log "LLVM ${LLVM_VERSION} para ${LFS_TGT} — build CRUZADO (usa el llvm-tblgen nativo)"
+    log "LLVM+Clang ${LLVM_VERSION} para ${LFS_TGT} — build CRUZADO (usa llvm-tblgen/clang-tblgen nativos)"
     _llvm_fetch_extract
 
     local src="${LFS_BUILD}/llvm-project-${LLVM_VERSION}.src"
@@ -440,8 +505,10 @@ step_llvm() {
         -DCMAKE_TOOLCHAIN_FILE="${toolchain}" \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DLLVM_TABLEGEN="${LLVM_TABLEGEN_NATIVE}" \
+        -DCLANG_TABLEGEN="${CLANG_TABLEGEN_NATIVE}" \
         -DLLVM_DEFAULT_TARGET_TRIPLE="${LFS_TGT}" \
         -DLLVM_HOST_TRIPLE="${LFS_TGT}" \
+        -DCLANG_LINK_CLANG_DYLIB=ON \
         "${LLVM_CMAKE_COMMON_FLAGS[@]}"
 
     ninja -C "${bdir}" ${MAKEFLAGS}
@@ -463,16 +530,24 @@ step_llvm() {
         || die "falta patchelf en el contenedor -- agregalo al Dockerfile (apt-get install patchelf) y correé 'podman-compose build' de nuevo"
     patchelf --set-rpath "${LLVM_NATIVE_BUILD}/lib" "${LFS_SYSROOT}/usr/bin/llvm-config"
 
-    log "LLVM instalado en ${LFS_SYSROOT}/usr (libLLVM compartida + llvm-config nativo pisado encima, RPATH corregido con patchelf)"
+    log "LLVM+Clang instalados en ${LFS_SYSROOT}/usr (libLLVM + libclang-cpp compartidas, llvm-config nativo pisado encima, RPATH corregido con patchelf)"
 }
 
 step_verify_llvm() {
-    log "Verificación: LLVM en el sysroot + llvm-config nativo funcional"
+    log "Verificación: LLVM+Clang en el sysroot + llvm-config nativo funcional"
     local ok=1
     if ! find "${LFS_SYSROOT}/usr/lib" -maxdepth 1 -name 'libLLVM*.so*' 2>/dev/null | grep -q .; then
         echo "  [FALTA] libLLVM*.so en ${LFS_SYSROOT}/usr/lib"; ok=0
     else
         echo "  [OK] libLLVM*.so presente"
+    fi
+    # libclang-cpp.so: agregado 2026-09-02 -- lo necesita Mesa (dep_clang vía
+    # cpp.find_library('clang-cpp', ...), ver bloque grande al principio del
+    # archivo) para compilar mesa-clc/intel_clc (iris/anv).
+    if ! find "${LFS_SYSROOT}/usr/lib" -maxdepth 1 -name 'libclang-cpp.so*' 2>/dev/null | grep -q .; then
+        echo "  [FALTA] libclang-cpp.so en ${LFS_SYSROOT}/usr/lib"; ok=0
+    else
+        echo "  [OK] libclang-cpp.so presente"
     fi
     local lc="${LFS_SYSROOT}/usr/bin/llvm-config"
     if [[ ! -x "${lc}" ]]; then
@@ -488,8 +563,8 @@ step_verify_llvm() {
             echo "  [OK] ${lc} --includedir = ${includedir}"
         fi
     fi
-    [[ "${ok}" -eq 1 ]] || die "falta algo de LLVM en el sysroot (ver arriba)"
-    log "OK: LLVM completo y llvm-config funcional."
+    [[ "${ok}" -eq 1 ]] || die "falta algo de LLVM/Clang en el sysroot (ver arriba)"
+    log "OK: LLVM+Clang completos y llvm-config funcional."
 }
 
 # ------------------------------------------------------------------------------
@@ -548,7 +623,189 @@ step_glslang_native() {
 }
 
 # ------------------------------------------------------------------------------
-# 5) Mesa — Meson. Drivers elegidos para cubrir Intel/AMD/Nvidia reales del
+# 5) SPIRV-Headers — sin build propio, sólo dos checkouts de fuente (headers +
+# gramática JSON de Khronos). Dos copias SEPARADAS a propósito: SPIRV-Tools y
+# SPIRV-LLVM-Translator piden cada uno un commit distinto (confirmado leyendo
+# el DEPS real de SPIRV-Tools y el spirv-headers-tag.conf real de
+# SPIRV-LLVM-Translator -- no son el mismo commit, así que no se asume que
+# son intercambiables). Ver env.sh para el porqué de cada commit puntual.
+# ------------------------------------------------------------------------------
+SPIRV_HEADERS_FOR_TOOLS_DIR="${LFS_BUILD}/SPIRV-Headers-${SPIRV_HEADERS_FOR_TOOLS_COMMIT}"
+SPIRV_HEADERS_FOR_TRANSLATOR_DIR="${LFS_BUILD}/SPIRV-Headers-${SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT}"
+
+step_spirv_headers() {
+    log "SPIRV-Headers — dos checkouts de fuente (uno para SPIRV-Tools, otro para SPIRV-LLVM-Translator)"
+
+    cd "${LFS_SOURCES}"
+    fetch "${SPIRV_HEADERS_MIRROR}/${SPIRV_HEADERS_FOR_TOOLS_COMMIT}.tar.gz" \
+          "spirv-headers-${SPIRV_HEADERS_FOR_TOOLS_COMMIT}.tar.gz"
+    log_sha256 "${LFS_SOURCES}/spirv-headers-${SPIRV_HEADERS_FOR_TOOLS_COMMIT}.tar.gz"
+    extract_once "${LFS_SOURCES}/spirv-headers-${SPIRV_HEADERS_FOR_TOOLS_COMMIT}.tar.gz" \
+                 "${LFS_BUILD}/.extracted-spirv-headers-for-tools"
+
+    fetch "${SPIRV_HEADERS_MIRROR}/${SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT}.tar.gz" \
+          "spirv-headers-${SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT}.tar.gz"
+    log_sha256 "${LFS_SOURCES}/spirv-headers-${SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT}.tar.gz"
+    extract_once "${LFS_SOURCES}/spirv-headers-${SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT}.tar.gz" \
+                 "${LFS_BUILD}/.extracted-spirv-headers-for-translator"
+
+    [[ -d "${SPIRV_HEADERS_FOR_TOOLS_DIR}" ]] \
+        || die "no se extrajo SPIRV-Headers para SPIRV-Tools en ${SPIRV_HEADERS_FOR_TOOLS_DIR} -- si el archive de GitHub arma el directorio con otro nombre (ver comentario de SPIRV_HEADERS_MIRROR en env.sh), avisame con el nombre real y lo ajusto"
+    [[ -d "${SPIRV_HEADERS_FOR_TRANSLATOR_DIR}" ]] \
+        || die "no se extrajo SPIRV-Headers para SPIRV-LLVM-Translator en ${SPIRV_HEADERS_FOR_TRANSLATOR_DIR} (mismo comentario que arriba)"
+    log "SPIRV-Headers listos: ${SPIRV_HEADERS_FOR_TOOLS_DIR} y ${SPIRV_HEADERS_FOR_TRANSLATOR_DIR}"
+}
+
+# ------------------------------------------------------------------------------
+# 6) SPIRV-Tools — CMake, build CRUZADO. Provee libSPIRV-Tools + el
+# SPIRV-Tools.pc que tanto Mesa como SPIRV-LLVM-Translator buscan por
+# pkg-config. SPIRV_SKIP_EXECUTABLES=ON fuerza SPIRV_SKIP_TESTS=ON
+# (confirmado en el CMakeLists.txt real: "if (SPIRV_SKIP_EXECUTABLES) set
+# (SPIRV_SKIP_TESTS ON)") -- evita todo el bloque de external/CMakeLists.txt
+# que si no intentaría configurar googletest/effcee/re2/protobuf/abseil (sólo
+# hacen falta para los tests, que no vamos a correr; ninguno de esos
+# proyectos está en nuestras fuentes y sin este flag el build fallaría
+# pidiéndolos). -DSPIRV-Headers_SOURCE_DIR apunta al checkout ya bajado por
+# step_spirv_headers() -- evita el FetchContent+git clone que el propio
+# CMakeLists.txt de SPIRV-Tools intentaría si no se lo pisamos (ver
+# comentario de fetch() en este mismo archivo sobre por qué este proyecto no
+# depende de git en tiempo de build).
+# ------------------------------------------------------------------------------
+step_spirv_tools() {
+    require_toolchain
+    [[ -d "${SPIRV_HEADERS_FOR_TOOLS_DIR}" ]] \
+        || die "no está SPIRV-Headers para SPIRV-Tools -- corré primero: scripts/build-mesa.sh spirv-headers"
+
+    log "SPIRV-Tools ${SPIRV_TOOLS_VERSION} para ${LFS_TGT} — CMake+Ninja"
+
+    cd "${LFS_SOURCES}"
+    fetch "${SPIRV_TOOLS_MIRROR}/v${SPIRV_TOOLS_VERSION}.tar.gz" "spirv-tools-${SPIRV_TOOLS_VERSION}.tar.gz"
+    log_sha256 "${LFS_SOURCES}/spirv-tools-${SPIRV_TOOLS_VERSION}.tar.gz"
+    extract_once "${LFS_SOURCES}/spirv-tools-${SPIRV_TOOLS_VERSION}.tar.gz" \
+                 "${LFS_BUILD}/.extracted-spirv-tools"
+
+    # GitHub arma el directorio del archive de un tag como "<repo>-<tag sin
+    # la 'v' inicial>" -- mismo patrón que systemd/uutils en este proyecto.
+    local src="${LFS_BUILD}/SPIRV-Tools-${SPIRV_TOOLS_VERSION}"
+    [[ -d "${src}" ]] || die "no se extrajo SPIRV-Tools en ${src} -- si el directorio real tiene otro nombre avisame con \`tar -tzf sources/spirv-tools-${SPIRV_TOOLS_VERSION}.tar.gz | head\` y lo ajusto"
+    cd "${src}"
+
+    local toolchain="${LFS_BUILD}/cmake-cross-linsi.cmake"
+    write_cmake_toolchain "${toolchain}"
+
+    local bdir="${LFS_BUILD}/spirv-tools-cross-build"
+    rm -rf "${bdir}"
+
+    # -DSPIRV_WERROR=OFF: SPIRV-Tools compila con -Werror por default (pensado
+    # para su propio CI, con compiladores puntuales ya probados) -- con
+    # nuestro cross-gcc puede saltar algún warning benigno no contemplado
+    # ahí; no vale la pena que tire abajo el build entero por eso.
+    cmake -S "${src}" -B "${bdir}" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="${toolchain}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSPIRV-Headers_SOURCE_DIR="${SPIRV_HEADERS_FOR_TOOLS_DIR}" \
+        -DSPIRV_SKIP_EXECUTABLES=ON \
+        -DSPIRV_WERROR=OFF
+
+    ninja -C "${bdir}" ${MAKEFLAGS}
+    DESTDIR="${LFS_SYSROOT}" ninja -C "${bdir}" install
+
+    log "SPIRV-Tools instalado en ${LFS_SYSROOT}/usr"
+}
+
+step_verify_spirv_tools() {
+    log "Verificación: SPIRV-Tools.pc en el sysroot"
+    local ok=1
+    if find "${LFS_SYSROOT}/usr/lib/pkgconfig" -maxdepth 1 -name 'SPIRV-Tools.pc' 2>/dev/null | grep -q .; then
+        echo "  [OK] SPIRV-Tools.pc presente"
+    else
+        echo "  [FALTA] SPIRV-Tools.pc en ${LFS_SYSROOT}/usr/lib/pkgconfig"; ok=0
+    fi
+    [[ "${ok}" -eq 1 ]] || die "falta SPIRV-Tools en el sysroot"
+    log "OK: SPIRV-Tools completo en el sysroot."
+}
+
+# ------------------------------------------------------------------------------
+# 7) SPIRV-LLVM-Translator — CMake, build CRUZADO, standalone (fuera del
+# árbol de llvm-project, apuntando al LLVM ya cruzado e instalado en el
+# sysroot vía -DLLVM_DIR). Provee libLLVMSPIRVLib + el LLVMSPIRVLib.pc que
+# pide directo el meson.build real de Mesa.
+#
+# -DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR apunta al checkout de
+# step_spirv_headers() (el commit que pide ESTE proyecto puntual, distinto
+# al de SPIRV-Tools) -- confirmado contra el CMakeLists.txt real de la rama
+# llvm_release_230 que si no se lo pisamos intenta un FetchContent+git clone
+# de SPIRV-Headers.git en tiempo de configure, algo que este proyecto evita
+# en todos lados por la conexión inestable (ver fetch() más arriba).
+#
+# BASE_LLVM_VERSION=23.1.0 está fijado adentro del propio CMakeLists.txt de
+# esta rama (llvm_release_230) -- coincide exacto con nuestro LLVM_VERSION,
+# confirmando que es la rama correcta (no una suposición por continuidad
+# numérica de nombre de rama).
+#
+# PKG_CONFIG_PATH: SPIRV-LLVM-Translator intenta encontrar SPIRV-Tools por
+# pkg-config primero (pkg_search_module, opcional -- sólo habilita el flag
+# --spirv-tools-dis de su CLI, que no usamos) -- se lo damos igual porque ya
+# lo tenemos armado (step_spirv_tools) y no cuesta nada extra.
+# ------------------------------------------------------------------------------
+SPIRV_LLVM_TRANSLATOR_SRC="${LFS_BUILD}/SPIRV-LLVM-Translator-${SPIRV_LLVM_TRANSLATOR_COMMIT}"
+
+step_spirv_llvm_translator() {
+    require_toolchain
+    [[ -x "${LFS_SYSROOT}/usr/bin/llvm-config" ]] \
+        || die "no está LLVM en el sysroot -- corré primero: scripts/build-mesa.sh llvm"
+    [[ -d "${SPIRV_HEADERS_FOR_TRANSLATOR_DIR}" ]] \
+        || die "no está SPIRV-Headers para SPIRV-LLVM-Translator -- corré primero: scripts/build-mesa.sh spirv-headers"
+
+    log "SPIRV-LLVM-Translator (llvm_release_230, commit ${SPIRV_LLVM_TRANSLATOR_COMMIT:0:12}) para ${LFS_TGT} — CMake+Ninja"
+
+    cd "${LFS_SOURCES}"
+    fetch "${SPIRV_LLVM_TRANSLATOR_MIRROR}/${SPIRV_LLVM_TRANSLATOR_COMMIT}.tar.gz" \
+          "spirv-llvm-translator-${SPIRV_LLVM_TRANSLATOR_COMMIT}.tar.gz"
+    log_sha256 "${LFS_SOURCES}/spirv-llvm-translator-${SPIRV_LLVM_TRANSLATOR_COMMIT}.tar.gz"
+    extract_once "${LFS_SOURCES}/spirv-llvm-translator-${SPIRV_LLVM_TRANSLATOR_COMMIT}.tar.gz" \
+                 "${LFS_BUILD}/.extracted-spirv-llvm-translator"
+
+    [[ -d "${SPIRV_LLVM_TRANSLATOR_SRC}" ]] \
+        || die "no se extrajo SPIRV-LLVM-Translator en ${SPIRV_LLVM_TRANSLATOR_SRC} -- si el directorio real tiene otro nombre avisame con \`tar -tzf sources/spirv-llvm-translator-${SPIRV_LLVM_TRANSLATOR_COMMIT}.tar.gz | head\` y lo ajusto"
+    cd "${SPIRV_LLVM_TRANSLATOR_SRC}"
+
+    local toolchain="${LFS_BUILD}/cmake-cross-linsi.cmake"
+    write_cmake_toolchain "${toolchain}"
+
+    local bdir="${LFS_BUILD}/spirv-llvm-translator-cross-build"
+    rm -rf "${bdir}"
+
+    PKG_CONFIG_PATH="${LFS_SYSROOT}/usr/lib/pkgconfig:${LFS_SYSROOT}/usr/share/pkgconfig" \
+    cmake -S "${SPIRV_LLVM_TRANSLATOR_SRC}" -B "${bdir}" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="${toolchain}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DLLVM_DIR="${LFS_SYSROOT}/usr/lib/cmake/llvm" \
+        -DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR="${SPIRV_HEADERS_FOR_TRANSLATOR_DIR}" \
+        -DLLVM_SPIRV_INCLUDE_TESTS=OFF
+
+    ninja -C "${bdir}" ${MAKEFLAGS}
+    DESTDIR="${LFS_SYSROOT}" ninja -C "${bdir}" install
+
+    log "SPIRV-LLVM-Translator instalado en ${LFS_SYSROOT}/usr"
+}
+
+step_verify_spirv_llvm_translator() {
+    log "Verificación: LLVMSPIRVLib.pc en el sysroot"
+    local ok=1
+    if find "${LFS_SYSROOT}/usr/lib/pkgconfig" -maxdepth 1 -name 'LLVMSPIRVLib.pc' 2>/dev/null | grep -q .; then
+        echo "  [OK] LLVMSPIRVLib.pc presente"
+    else
+        echo "  [FALTA] LLVMSPIRVLib.pc en ${LFS_SYSROOT}/usr/lib/pkgconfig"; ok=0
+    fi
+    [[ "${ok}" -eq 1 ]] || die "falta SPIRV-LLVM-Translator en el sysroot"
+    log "OK: SPIRV-LLVM-Translator completo en el sysroot."
+}
+
+# ------------------------------------------------------------------------------
+# 8) Mesa — Meson. Drivers elegidos para cubrir Intel/AMD/Nvidia reales del
 # lab (ver el aviso al principio del archivo). --native-file hace falta
 # porque Mesa también invoca wayland-scanner en tiempo de build (protocolo
 # linux-dmabuf/wayland-drm para la plataforma EGL wayland) -- mismo problema
@@ -578,8 +835,19 @@ step_mesa() {
         || die "no está el wayland-scanner NATIVO en ${WAYLAND_SCANNER_NATIVE_PREFIX}/bin -- corré primero: scripts/build-desktop.sh wayland (Fase 6 Parte 1)"
     [[ -x "${GLSLANG_NATIVE_BIN}" ]] \
         || die "no está glslangValidator NATIVO en ${GLSLANG_NATIVE_BIN} -- corré primero: scripts/build-mesa.sh glslang-native"
+    # Con iris/intel_vk habilitados, Mesa activa with_driver_using_cl (compila
+    # mesa-clc/intel_clc) -- ver bloque grande al principio del archivo.
+    if ! find "${LFS_SYSROOT}/usr/lib" -maxdepth 1 -name 'libclang-cpp.so*' 2>/dev/null | grep -q .; then
+        die "no está libclang-cpp.so en el sysroot -- corré primero: scripts/build-mesa.sh llvm (ya con LLVM_ENABLE_PROJECTS=clang)"
+    fi
+    if ! find "${LFS_SYSROOT}/usr/lib/pkgconfig" -maxdepth 1 -name 'SPIRV-Tools.pc' 2>/dev/null | grep -q .; then
+        die "no está SPIRV-Tools.pc en el sysroot -- corré primero: scripts/build-mesa.sh spirv-headers && scripts/build-mesa.sh spirv-tools"
+    fi
+    if ! find "${LFS_SYSROOT}/usr/lib/pkgconfig" -maxdepth 1 -name 'LLVMSPIRVLib.pc' 2>/dev/null | grep -q .; then
+        die "no está LLVMSPIRVLib.pc en el sysroot -- corré primero: scripts/build-mesa.sh spirv-llvm-translator"
+    fi
 
-    log "Mesa ${MESA_VERSION} para ${LFS_TGT} — Meson+Ninja (gallium: iris/radeonsi/nouveau/llvmpipe, vulkan: amd/intel)"
+    log "Mesa ${MESA_VERSION} para ${LFS_TGT} — Meson+Ninja (gallium: iris/radeonsi/nouveau/llvmpipe, vulkan: amd/intel, + mesa-clc/intel_clc vía Clang/SPIRV-Tools/LLVMSPIRVLib)"
 
     cd "${LFS_SOURCES}"
     fetch "${MESA_MIRROR}/mesa-mesa-${MESA_VERSION}.tar.gz" "mesa-${MESA_VERSION}.tar.gz"
@@ -670,24 +938,32 @@ step_verify_mesa() {
 main() {
     local target="${1:-all}"
     case "${target}" in
-        libdrm)         step_libdrm ;;
-        verify-libdrm)  step_verify_libdrm ;;
-        llvm-native)    step_llvm_native ;;
-        llvm)           step_llvm ;;
-        verify-llvm)    step_verify_llvm ;;
-        glslang-native) step_glslang_native ;;
-        mesa)           step_mesa ;;
-        verify-mesa)    step_verify_mesa ;;
+        libdrm)                   step_libdrm ;;
+        verify-libdrm)            step_verify_libdrm ;;
+        llvm-native)              step_llvm_native ;;
+        llvm)                     step_llvm ;;
+        verify-llvm)              step_verify_llvm ;;
+        glslang-native)           step_glslang_native ;;
+        spirv-headers)            step_spirv_headers ;;
+        spirv-tools)              step_spirv_tools ;;
+        verify-spirv-tools)       step_verify_spirv_tools ;;
+        spirv-llvm-translator)    step_spirv_llvm_translator ;;
+        verify-spirv-llvm-translator) step_verify_spirv_llvm_translator ;;
+        mesa)                     step_mesa ;;
+        verify-mesa)              step_verify_mesa ;;
         all)
             step_libdrm;      step_verify_libdrm
             step_llvm_native
             step_llvm;        step_verify_llvm
             step_glslang_native
+            step_spirv_headers
+            step_spirv_tools;             step_verify_spirv_tools
+            step_spirv_llvm_translator;   step_verify_spirv_llvm_translator
             step_mesa;        step_verify_mesa
-            log "Fase 6 parte 2 ('Mesa + LLVM') completa: libdrm, LLVM (X86+AMDGPU) y Mesa (iris/radeonsi/nouveau/llvmpipe + Vulkan amd/intel) listos en el sysroot. Falta Qt6/KDE Frameworks -- va en su propio script."
+            log "Fase 6 parte 2 ('Mesa + LLVM') completa: libdrm, LLVM+Clang (X86+AMDGPU), SPIRV-Tools, SPIRV-LLVM-Translator y Mesa (iris/radeonsi/nouveau/llvmpipe + Vulkan amd/intel, con mesa-clc/intel_clc para Intel real) listos en el sysroot. Falta Qt6/KDE Frameworks -- va en su propio script."
             ;;
         *)
-            die "target desconocido: ${target} (usar: libdrm|llvm-native|llvm|glslang-native|mesa|all, cada uno con su verify-<paso> salvo llvm-native/glslang-native)"
+            die "target desconocido: ${target} (usar: libdrm|llvm-native|llvm|glslang-native|spirv-headers|spirv-tools|spirv-llvm-translator|mesa|all, cada uno con su verify-<paso> salvo llvm-native/glslang-native/spirv-headers)"
             ;;
     esac
 }

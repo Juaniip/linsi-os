@@ -289,6 +289,81 @@ export MESA_VERSION="26.2.1"                 # VERIFICAR: gitlab.fd.o bloqueado 
 # gitlab.fd.o), confirmado contra la página de releases en vivo.
 export GLSLANG_VERSION="16.3.0"
 
+# --- Fase 6 Parte 2 (cont.) — Clang + SPIRV-Tools + SPIRV-LLVM-Translator ------
+# Agregado 2026-09-02, decisión explícita (Opción B de CONTEXTO_PENDIENTE_MESA.md,
+# tomada en la PC de escritorio con 48GB de RAM): el build real de Mesa
+# ${MESA_VERSION} con iris+intel_vk habilitados (RTX3060/RX7700/Intel del lab)
+# activa "with_driver_using_cl" en el meson.build real de Mesa -- necesita
+# compilar mesa-clc/intel_clc (compilador interno de OpenCL C -> SPIR-V que
+# iris/anv usan para shaders internos). El error real ya visto en la sesión
+# anterior ("Dependency 'LLVMSPIRVLib' not found") es sólo la PRIMERA de varias
+# dependencias nuevas que hace falta agregar -- lo siguiente está confirmado
+# leyendo el meson.build REAL de mesa-${MESA_VERSION} (extraído del propio
+# mesa-${MESA_VERSION}.tar.gz ya descargado en sources/, no de un mirror
+# desactualizado) en vez de asumir contra la documentación genérica de Mesa:
+#
+#   - dep_clang (línea ~2095 del meson.build real): NO usa
+#     dependency('clang', method:'cmake') como en versiones viejas de Mesa --
+#     usa cpp.find_library('clang-cpp', dirs: llvm_libdir) primero, y sólo si
+#     eso falla (o si LLVM no es shared) cae a linkear ~15 librerías estáticas
+#     de clang una por una. Como ya compilamos LLVM con -Dshared-llvm=enabled
+#     (shared-llvm=ON en Mesa), alcanza con que exista libclang-cpp.so en el
+#     sysroot -- no hace falta el binario `clang` ni sus herramientas, sólo
+#     las librerías (LLVM_ENABLE_PROJECTS=clang alcanza, libclang-cpp.so se
+#     construye solo en Linux, confirmado contra clang/tools/CMakeLists.txt
+#     real de la tag llvmorg-${LLVM_VERSION}: la condición es sólo "UNIX AND
+#     NOT CYGWIN", no depende de ningún flag extra).
+#   - dep_spirv_tools (línea ~2084): SPIRV-Tools (>= 2024.1) es OBLIGATORIO
+#     apenas with_clc=true -- esto NO estaba mencionado en
+#     CONTEXTO_PENDIENTE_MESA.md (esa nota se escribió antes de poder leer el
+#     meson.build real). Es un componente nuevo, no sólo Clang+libclc+SPIRV-LLVM-
+#     Translator como se había anotado ahí.
+#   - dep_clc (libclc externo, línea ~985): CONFIRMADO que NO hace falta para
+#     nuestra selección de drivers. Sólo se resuelve
+#     "if with_gallium_rusticl or with_microsoft_clc" -- ninguno de los dos
+#     está en nuestro -Dgallium-drivers=iris,radeonsi,nouveau,llvmpipe /
+#     -Dvulkan-drivers=amd,intel. with_clc=true igual (por iris/intel_vk vía
+#     with_driver_using_cl), pero eso sólo obliga a LLVM+clang+SPIRV-Tools+
+#     LLVMSPIRVLib -- nir_load_libclc.c (el código que de verdad usa libclc)
+#     sólo se agrega al build "if dep_clc.found()", y dep_clc nunca se resuelve
+#     en nuestro caso. Confirmado además en
+#     src/compiler/clc/meson.build real (mismo tarball). Esto SIMPLIFICA la
+#     Opción B tal como se había descrito: no hace falta cross-compilar libclc
+#     (la parte más pesada y delicada de compilar bitcode LLVM por-target que
+#     se había anticipado) -- un componente entero menos.
+#
+# SPIRV-Headers: no tiene versión propia (es sólo headers + gramática JSON de
+# Khronos) -- cada proyecto que lo usa fija su propio commit exacto vía su
+# DEPS/config. SPIRV-Tools y SPIRV-LLVM-Translator piden commits DISTINTOS
+# (confirmado leyendo el DEPS real de SPIRV-Tools y el spirv-headers-tag.conf
+# real de SPIRV-LLVM-Translator, no asumiendo que son intercambiables) -- por
+# eso hay dos variables separadas, una por consumidor, en vez de una sola.
+export SPIRV_HEADERS_FOR_TOOLS_COMMIT="29981f65241605e08b0ede4cfeb999fe3b723c6a"      # = tag vulkan-sdk-1.4.357.0, pin real del DEPS de SPIRV-Tools v2026.3
+export SPIRV_HEADERS_FOR_TRANSLATOR_COMMIT="575b6512579ebde466ed3dfc04e413439d14d95d" # pin real de spirv-headers-tag.conf en la rama llvm_release_230
+
+# SPIRV-Tools: el propio README dice "GitHub releases are deprecated" -- no hay
+# tarball de "make dist", se usa el archive/refs/tags crudo (mismo patrón que
+# libcap-ng/audit-userspace/libcbor/polkit/libxkbcommon en este proyecto).
+# Versión confirmada por `git ls-remote --tags` en vivo contra el repo real
+# (no de memoria): último tag real "v2026.3" (2026-09), sobra para el piso
+# ">= 2024.1" que pide Mesa. CMake real de esta tag confirmado además:
+# SPIRV_SKIP_EXECUTABLES=ON implica SPIRV_SKIP_TESTS=ON y evita necesitar
+# googletest/effcee/re2/protobuf/abseil (sólo hacen falta para los tests) --
+# sólo se compila la librería, que es todo lo que Mesa necesita.
+export SPIRV_TOOLS_VERSION="2026.3"
+
+# SPIRV-LLVM-Translator: NO usa un esquema de tags con fecha como SPIRV-Tools
+# -- usa branches "llvm_release_XXX" (uno por versión mayor de LLVM), y el
+# wiki de releases del repo está desactualizado (se dejó de mantener después
+# de la v11). Confirmado por `git ls-remote --heads` en vivo: existe
+# "llvm_release_230" (LLVM 23.x), y su CMakeLists.txt real fija
+# BASE_LLVM_VERSION=23.1.0 -- coincide EXACTO con nuestro LLVM_VERSION, así
+# que es la rama correcta, no una suposición por continuidad numérica. Se fija
+# el commit exacto que esa rama tenía en el momento de este research (en vez
+# de "la punta de la rama", que se puede mover) -- mismo criterio de
+# reproducibilidad que el resto de este proyecto.
+export SPIRV_LLVM_TRANSLATOR_COMMIT="c808623558686b7b285cabfa71542a93a5390f55" # HEAD de llvm_release_230 al momento de este research (2026-09-02)
+
 # --- Rutas --------------------------------------------------------------------
 export LFS="${LFS:-/lfs}"
 export LFS_SOURCES="${LFS}/sources"
@@ -504,6 +579,21 @@ export MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa/-/archive/mesa-${ME
 # glslang: release real de GitHub (KhronosGroup/glslang no está en
 # gitlab.fd.o), mismo patrón de URL que LIBXKBCOMMON_MIRROR de más arriba.
 export GLSLANG_MIRROR="https://github.com/KhronosGroup/glslang/archive/refs/tags"
+
+# SPIRV-Headers: archive crudo por commit exacto (no hay tags propios que
+# nos sirvan -- ver comentario largo de versión más arriba). GitHub arma el
+# directorio del tarball como "SPIRV-Headers-<sha-completo>" -- confirmado
+# por convención real de codeload.github.com para archives por commit (no
+# por tag), igual que ya se documentó para otros archives crudos de este
+# proyecto (libcbor, polkit, etc.) con tags en vez de shas.
+export SPIRV_HEADERS_MIRROR="https://github.com/KhronosGroup/SPIRV-Headers/archive"
+# SPIRV-Tools: archive/refs/tags crudo -- ver comentario de versión más
+# arriba (README real: "GitHub releases are deprecated").
+export SPIRV_TOOLS_MIRROR="https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags"
+# SPIRV-LLVM-Translator: archive crudo por commit exacto, mismo motivo que
+# SPIRV-Headers -- fijamos un commit puntual de la rama llvm_release_230, no
+# la rama en sí (que se mueve).
+export SPIRV_LLVM_TRANSLATOR_MIRROR="https://github.com/KhronosGroup/SPIRV-LLVM-Translator/archive"
 
 # --- Cargo (Fase 2, uutils) ----------------------------------------------------
 # CARGO_HOME por default es ~/.cargo (home del usuario "linsi" dentro del

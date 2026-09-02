@@ -247,7 +247,10 @@ las Partes 2/3.
 - **Script nuevo:** `scripts/build-mesa.sh` (independiente de
   `build-desktop.sh`, mismo patrón de siempre: se basta a sí mismo, no
   sourcea otros scripts de fase). Targets: `libdrm`, `verify-libdrm`,
-  `llvm-native`, `llvm`, `verify-llvm`, `mesa`, `verify-mesa`, `all`.
+  `llvm-native`, `llvm`, `verify-llvm`, `glslang-native`, `spirv-headers`,
+  `spirv-tools`, `verify-spirv-tools`, `spirv-llvm-translator`,
+  `verify-spirv-llvm-translator`, `mesa`, `verify-mesa`, `all` (los últimos
+  cinco agregados 2026-09-02, ver el "Duodécimo error real" más abajo).
 - **Alcance de hardware, confirmado por vos:** el laboratorio tiene máquinas
   mixtas (Nvidia RTX 3060, AMD RX 7700, gráfica integrada Intel, "etc"), o
   sea que no se puede asumir una sola marca — el driver stack tiene que
@@ -547,6 +550,85 @@ las Partes 2/3.
   hasta que el build real la confirma -- este mismo archivo ya tenía la
   cita al issue de Meson correcta, pero interpretada al revés de cómo
   terminó comportándose en la práctica.
+- **Duodécimo error real (2026-09-01/02), corregido -- decisión Opción B
+  tomada y research completo hecho en la PC de escritorio (48GB RAM).** Con
+  `llvm-config` ya resuelto, Mesa avanzó mucho más en el configure y falló
+  en:
+  ```
+  llvm-config found: YES (/lfs/usr/bin/llvm-config) 23.1.0
+  Run-time dependency LLVM (...) found: YES 23.1.0
+  Run-time dependency llvmspirvlib found: NO  (tried pkg-config)
+  meson.build:2078:21: ERROR: Dependency "LLVMSPIRVLib" not found (tried pkg-config)
+  ```
+  **Causa raíz:** con `iris` (gallium) e `intel_vk`/anv (vulkan) habilitados
+  para el Intel real del lab, el meson.build de Mesa activa
+  `with_driver_using_cl` -- hace falta compilar `mesa-clc`/`intel_clc`, su
+  compilador interno de OpenCL C a SPIR-V para shaders/kernels internos de
+  esos dos drivers.
+
+  Entre el corte de acceso a la compu anterior y esta sesión había quedado
+  sin decidir entre dos opciones (documentadas en un archivo aparte,
+  `CONTEXTO_PENDIENTE_MESA.md`, que ya se puede borrar -- este es el volcado
+  completo a este archivo, como decía esa nota que había que hacer):
+  - Opción A: sacar iris/intel de la config y dejar Intel para una pasada
+    aparte.
+  - **Opción B (la elegida, con los 48GB de la PC de escritorio):** agregar
+    Clang + SPIRV-Tools + SPIRV-LLVM-Translator al pipeline de
+    `build-mesa.sh` para tener las 3 GPUs (Nvidia/AMD/Intel) en esta misma
+    pasada.
+
+  **Research adicional que NO estaba en `CONTEXTO_PENDIENTE_MESA.md`** (esa
+  nota se había escrito sin poder leer el `meson.build` real de
+  mesa-26.2.1 -- esta vez sí, extraído directo del propio
+  `sources/mesa-26.2.1.tar.gz` ya descargado, en vez de un mirror
+  desactualizado de GitHub):
+  - **SPIRV-Tools (`>= 2024.1`) es OBLIGATORIO además de LLVMSPIRVLib** --
+    componente nuevo que la nota anterior no había detectado (`dep_spirv_tools`
+    se resuelve apenas `with_clc=true`, línea ~2084 del meson.build real).
+  - **`dep_clang` ya NO usa `dependency('clang', method:'cmake')`** en
+    Mesa 26.2.1 (eso era de versiones viejas) -- usa
+    `cpp.find_library('clang-cpp', dirs: llvm_libdir)` primero. Con
+    `-Dshared-llvm=enabled` (ya lo teníamos), alcanza con que exista
+    `libclang-cpp.so` en el sysroot -- mucho más simple que linkear ~15
+    librerías estáticas de Clang una por una.
+  - **libclc (el proyecto externo) NO hace falta**, a diferencia de lo que
+    decía la nota anterior. `dep_clc` (la dependencia `libclc` externa) sólo
+    se resuelve `if with_gallium_rusticl or with_microsoft_clc` -- ninguno
+    de los dos está en nuestra selección de drivers
+    (`iris,radeonsi,nouveau,llvmpipe` / `amd,intel`). `with_clc` queda en
+    `true` igual (por iris/intel_vk), pero el código que de verdad usa
+    libclc (`nir_load_libclc.c`, en `src/compiler/clc/meson.build` real)
+    sólo se agrega `if dep_clc.found()`, y nunca se resuelve en nuestro
+    caso. Esto simplifica bastante la Opción B: no hace falta
+    cross-compilar libclc (bitcode LLVM por-target para spirv/spirv64, la
+    parte más pesada y delicada que se había anticipado).
+  - **SPIRV-Headers**: no tiene versión propia. SPIRV-Tools y
+    SPIRV-LLVM-Translator piden cada uno un commit DISTINTO (confirmado
+    contra el `DEPS` real de SPIRV-Tools y el `spirv-headers-tag.conf` real
+    de SPIRV-LLVM-Translator) -- se bajan dos checkouts separados, uno por
+    consumidor, en vez de asumir que son intercambiables.
+  - **SPIRV-LLVM-Translator no usa tags con fecha** como SPIRV-Tools -- usa
+    branches `llvm_release_XXX` (el wiki de releases del repo está
+    desactualizado desde la v11, no sirve). `git ls-remote --heads` en vivo
+    confirmó que existe `llvm_release_230`, y su `CMakeLists.txt` real fija
+    `BASE_LLVM_VERSION=23.1.0` -- coincide exacto con nuestro LLVM, así que
+    es la rama correcta (no una suposición por continuidad numérica). Se
+    fijó el commit exacto que esa rama tenía al momento de este research
+    (no "la punta de la rama", que se mueve).
+  - **Cross-compilar Clang necesita un tool nativo nuevo**: `clang-tblgen`
+    (mismo mecanismo que `llvm-tblgen`, confirmado contra
+    `clang/CMakeLists.txt` real de la tag `llvmorg-23.1.0`, que documenta el
+    patrón `-DCLANG_TABLEGEN=.../clang-tblgen` para sus propios builds
+    "bootstrap"). `step_llvm_native()` ahora también lo compila, y
+    `step_llvm()` lo pasa vía `-DCLANG_TABLEGEN=...`.
+
+  **Todo esto ya está reflejado en `scripts/env.sh`** (versiones/commits de
+  SPIRV-Headers, SPIRV-Tools y SPIRV-LLVM-Translator, con los links de dónde
+  salió cada uno) **y en `scripts/build-mesa.sh`** (nuevos targets
+  `spirv-headers`, `spirv-tools`, `spirv-llvm-translator`, LLVM ahora con
+  `LLVM_ENABLE_PROJECTS=clang`, y `step_mesa()` con los chequeos previos
+  correspondientes) -- **sin correr todavía**, queda para la próxima corrida
+  real en la PC de escritorio.
 
 ## Fase 6 — Parte 3 (no empezada)
 
