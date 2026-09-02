@@ -629,6 +629,61 @@ las Partes 2/3.
   `LLVM_ENABLE_PROJECTS=clang`, y `step_mesa()` con los chequeos previos
   correspondientes) -- **sin correr todavía**, queda para la próxima corrida
   real en la PC de escritorio.
+- **Décimo tercer error real (2026-09-02), corregido -- primera corrida real
+  de la Opción B en la PC de escritorio, falló linkeando un binario que ni
+  Mesa ni nadie de este proyecto necesita:**
+  ```
+  : && /lfs/tools/bin/x86_64-linsi-linux-gnu-gcc --sysroot=/lfs ...
+  tools/clang/tools/clang-fuzzer/dictionary/CMakeFiles/clang-fuzzer-dictionary.dir/dictionary.c.o
+  -o bin/clang-fuzzer-dictionary ... lib/libLLVM.so.23.1 && :
+  .../ld: warning: libstdc++.so.6, needed by lib/libLLVM.so.23.1, not found
+  .../ld: lib/libLLVM.so.23.1: undefined reference to
+  `std::ctype<char>::_M_widen_init() const@GLIBCXX_3.4.11'
+  [... decenas más de símbolos GLIBCXX/CXXABI sin resolver ...]
+  collect2: error: ld returned 1 exit status
+  ninja: build stopped: subcommand failed.
+  ```
+  **Causa raíz:** `step_llvm()` pedía `ninja` sin target (= "all"), que
+  intenta construir los ~4600 targets de LLVM+Clang, incluidas ~180
+  herramientas standalone que este proyecto no usa (`llvm-mca`,
+  `llvm-objdump`, `clang-fuzzer-dictionary`, etc.). `clang-fuzzer-dictionary`
+  (en `clang/tools/clang-fuzzer/dictionary/`) es, de toda esa lista, la
+  ÚNICA que se arma desde una fuente puramente en C (`dictionary.c`) --
+  CMake por eso elige `gcc` (no `g++`) como driver de link para ese target
+  puntual, y `gcc` no agrega `-lstdc++` automáticamente aunque el binario
+  dependa de `libLLVM.so` (que sí es C++). Confirmado contra el
+  `CMakeLists.txt` real de ese directorio (tag `llvmorg-23.1.0`): no hay
+  ningún flag de CMake que lo desactive individualmente --
+  `add_clang_subdirectory(clang-fuzzer)` en `clang/tools/CMakeLists.txt` es
+  incondicional. Importante: esto NO es un problema de `libLLVM.so` ni de
+  `libclang-cpp.so` en sí -- ambas ya habían linkeado bien antes en el mismo
+  log; el que falla es un binario de test/fuzzing que no nos interesa.
+
+  **Fix real:** en vez de parchear ese target puntual (ni ninguno de los
+  otros ~180 que tampoco usamos), dejar de pedir "all" y pedirle a ninja
+  sólo los 4 targets con nombre bien definido que Mesa efectivamente
+  necesita (confirmado contra `llvm/CMakeLists.txt` y `clang/CMakeLists.txt`
+  reales): `LLVM` (el .so, `dep_llvm` de Mesa), `clang-cpp` (el .so,
+  `dep_clang`), `llvm-headers` y `clang-headers` (headers instalados, los
+  usa `mesa-clc`/`clc_helpers.cpp` directo). Cada uno trae un target
+  `install-<nombre>` autogenerado por `add_llvm_install_targets()`
+  (`AddLLVM.cmake` real) que depende sólo de construir el target
+  correspondiente -- entonces `ninja LLVM clang-cpp llvm-headers
+  clang-headers` + `ninja install-LLVM install-clang-cpp install-llvm-headers
+  install-clang-headers` nunca le pide nada a ninja sobre
+  `clang-fuzzer-dictionary` ni el resto de binarios sueltos que no usamos.
+  Ya aplicado en `step_llvm()` de `build-mesa.sh`, validado con `bash -n` y
+  `shellcheck -S warning -e SC1091` (limpio), sin tocar `step_verify_llvm()`
+  (sigue buscando `libLLVM*.so*`/`libclang-cpp.so*` en el sysroot, que estos
+  4 targets siguen produciendo igual).
+
+  **Lección:** al cross-compilar un proyecto ajeno enorme (LLVM/Clang acá),
+  nunca pedir el target por defecto ("all"/sin target) sólo porque "compila
+  todo, seguro"-- ese "todo" casi siempre incluye binarios de test/fuzzing/
+  debug que ni el proyecto propio necesita y que pueden fallar por razones
+  que no tienen nada que ver con lo que en verdad se está usando. Conviene
+  identificar los targets de librería/instalación puntuales que el
+  consumidor real (acá, Mesa) necesita y pedir sólo esos.
 
 ## Fase 6 — Parte 3 (no empezada)
 

@@ -511,8 +511,47 @@ step_llvm() {
         -DCLANG_LINK_CLANG_DYLIB=ON \
         "${LLVM_CMAKE_COMMON_FLAGS[@]}"
 
-    ninja -C "${bdir}" ${MAKEFLAGS}
-    DESTDIR="${LFS_SYSROOT}" ninja -C "${bdir}" install
+    # AGREGADO 2026-09-0X, error real: pedir "ninja" sin target (= "all")
+    # intenta construir TODOS los binarios de LLVM+Clang -- unos 4600
+    # targets, incluidos ~130 herramientas standalone que no usamos para
+    # nada (llvm-mca, llvm-objdump, clang-fuzzer-dictionary, etc.). Uno de
+    # esos, clang-fuzzer-dictionary (clang/tools/clang-fuzzer/dictionary/),
+    # rompió el build real:
+    #   ld: lib/libLLVM.so.23.1: undefined reference to
+    #   `std::ctype<char>::_M_widen_init() const@GLIBCXX_3.4.11' (+ decenas
+    #   más de símbolos GLIBCXX/CXXABI)
+    # Causa real: dictionary.c es la ÚNICA fuente puramente en C de todo
+    # clang/llvm/tools -- CMake detecta el "linker language" de ese target
+    # como C (no C++) y usa el driver `gcc` para linkear, no `g++`. `gcc`
+    # (a diferencia de `g++`) NO agrega automáticamente `-lstdc++` aunque el
+    # binario dependa de una librería C++ (acá, libLLVM.so) -- confirmado
+    # contra clang/tools/clang-fuzzer/dictionary/CMakeLists.txt real: no
+    # hay ningún guard/opción de CMake para desactivar sólo este target
+    # puntual (`add_clang_subdirectory(clang-fuzzer)` en
+    # clang/tools/CMakeLists.txt es incondicional).
+    #
+    # La solución real no es parchear ese target (ni ninguno de los otros
+    # ~180 que tampoco usamos) -- es no pedirlos. De TODO lo que compila
+    # "all", Mesa sólo necesita 4 targets con nombre bien definido en el
+    # CMake real de LLVM/Clang (confirmado contra llvm/CMakeLists.txt y
+    # clang/CMakeLists.txt de la tag llvmorg-${LLVM_VERSION}):
+    #   - LLVM              -> el .so (libLLVM.so.<ver>), dep_llvm de Mesa
+    #   - clang-cpp         -> el .so (libclang-cpp.so.<ver>), dep_clang
+    #   - llvm-headers      -> headers de LLVM instalados (llvm-config
+    #                          --includedir apunta ahí)
+    #   - clang-headers     -> headers de Clang instalados (mesa-clc
+    #                          incluye <clang/...> directo, ver
+    #                          src/compiler/clc/clc_helpers.cpp real)
+    # Cada uno de estos, vía add_llvm_library/add_clang_library, ya trae un
+    # target "install-<nombre>" generado por add_llvm_install_targets()
+    # (AddLLVM.cmake real) que depende del target de build correspondiente
+    # -- entonces "ninja install-LLVM install-clang-cpp ..." construye SÓLO
+    # lo que hace falta para esos cuatro (reusa todos los .o de clang que
+    # clang-cpp empaqueta) y nunca le pide nada a ninja sobre
+    # clang-fuzzer-dictionary ni al resto de los ~180 binarios sueltos.
+    ninja -C "${bdir}" ${MAKEFLAGS} LLVM clang-cpp llvm-headers clang-headers
+    DESTDIR="${LFS_SYSROOT}" ninja -C "${bdir}" \
+        install-LLVM install-clang-cpp install-llvm-headers install-clang-headers
 
     # Pisar el llvm-config cruzado (instalado recién por el "ninja install"
     # de arriba, pero NO ejecutable acá sin chroot) con el nativo -- ver el
